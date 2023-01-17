@@ -2,28 +2,13 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.keras import layers
 from PIL import Image
+from functools import partial
 
 import albumentations as A
 from datasets import load_dataset
 
 from models.resnet import ResNet50
 # load dataset and preprocessing
-
-"""
-preprocessing = tf.keras.Sequential([
-                    layers.Lambda(lambda x: x.convert('RGB') if x.mode !='RGB' else x),
-                    layers.RandomCrop(224, 224),
-                    layers.RandomFlip(mode = 'horizontal'),
-                    layers.Normalization(mean = [0.485, 0.456, 0.406], variance = [0.229*0.229, 0.224*0.224, 0.225*0.225])
-                ])
-"""
-
-def convert_rgb(image, **kwargs):
-    
-    if image.mode != 'RGB':
-        return image.convert('RGB')
-    else:
-        return image
 
 preprocessing = A.Compose([
                     #A.Lambda(image = convert_rgb, p = 1.0),
@@ -53,20 +38,55 @@ def transform(examples):
     labels = tf.stack(labels)
     return imgs, labels
 
+
+def generator():
+    for data in train_dataset.shuffle():
+        img, label = data['image'], data['label']
+        #print("[DEBUG] generator type img: ", type(img))
+        img = (lambda x: x.convert('RGB') if x.mode != 'RGB' else x)(img)
+        img = preprocessing(image = np.array(img))['image']
+
+        yield img, label
+
+model = ResNet50(classifier_activation = 'softmax')
+
 imgnet = load_dataset('imagenet-1k')
-print("[DEBUG] imgnet: ", imgnet)
-#train_dataset = imgnet['train'].to_tf_dataset(columns = ['image'], label_cols = ['label'], 
-#                                              batch_size = 2, collate_fn = transform)
 train_dataset = imgnet['train']
-train_dataset.map(batch_size=32).set_transform(transform)
-#print("[DEBUG] type: ", type(train_dataset))
+num_train_data = len(train_dataset)
+train_loader = tf.data.Dataset.from_generator(generator, 
+                                              output_shapes = ((224, 224, 3), ()),
+                                              output_types = (tf.float32, tf.int32)
+                                              )
 
-for data in train_dataset:
-    img, label = data['image'], data['label']
-    print(img, label)
-    break
+optimizer = tf.keras.optimizers.experimental.SGD(learning_rate = 0.001, momentum = 0.9, weight_decay = 0.0)
+criterion = tf.keras.losses.SparseCategoricalCrossentropy()
+
+top1_metric = tf.keras.metrics.SparseTopKCategoricalAccuracy(k=1)
+top5_metric = tf.keras.metrics.SparseTopKCategoricalAccuracy(k=5)
+
+for data in train_loader.batch(256).prefetch(1):
+
+    images, labels = data
+
+    with tf.GradientTape() as g:
+        preds = model(images)
+        loss  = criterion(labels, preds)
+
+    gradients = g.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    
+    print("[DEBUG] type labels: ", type(labels.numpy()), " type preds: ", type(preds.numpy()))
+    print("preds.shape: ", preds.numpy().shape)
+    print("labels.shape: ", labels.numpy().shape)
+    
+    top1_metric.reset_state()
+    top5_metric.reset_state()
+    top1_metric.update_state(labels.numpy(), preds.numpy())
+    top5_metric.update_state(labels.numpy(), preds.numpy())
+
+    #prec1, prec5 = accuracy(preds, labels, topk = (1, 5))
+    print(f"[DEBUG]: Top1 {top1_metric.result().numpy()} / Top5 {top5_metric.result().numpy()}")
 
 
-#print(imgnet['train']['image'][0])
-#tf_imgnet = imgnet.to_tf_dataset(
-#resnet = ResNet50(weights='imagenet', pooling = 'avg', classifier_activation = 'softmax')
+    
+

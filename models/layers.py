@@ -6,6 +6,8 @@ class GateLayer(tf.keras.layers.Layer):
         self.weight = self.add_weight(shape = (1, 1, 1, input_features),
                                       initializer = tf.keras.initializers.Ones())
         
+        self.trainable = False
+        
     def call(self, x):
         return tf.multiply(x, self.weight)
 
