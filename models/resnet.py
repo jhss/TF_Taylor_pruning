@@ -1,8 +1,3 @@
-"""
-This code is modifed by Juhong from official Tensorflow code.
-https://github.com/keras-team/keras/blob/v2.11.0/keras/applications/resnet.py
-"""
-
 import tensorflow.compat.v2 as tf
 
 from keras import backend
@@ -15,7 +10,7 @@ from keras.utils import layer_utils
 # isort: off
 from tensorflow.python.util.tf_export import keras_export
 
-from layers import GateLayer
+from models.layers import GateLayer
 
 BASE_WEIGHTS_PATH = (
     "https://storage.googleapis.com/tensorflow/keras-applications/resnet/"
@@ -226,10 +221,26 @@ def ResNet(
         layer_dict = dict([(layer.name, layer) for layer in base_model.layers])
         #print("[DEBUG] base_model_dict: ", layer_dict)
 
-        for base_layer, custom_layer in zip(layer_dict.keys(), model.layers):
-            print(base_layer, custom_layer.name)
-        print("[DEBUG] Finish")
-        sys.exit()
+        used_named_weights = set()
+
+        for layer in model.layers:
+            if 'gate' in layer.name: continue
+            base_layer = layer_dict.get(layer.name, None)
+
+            if base_layer == None:
+                print(f"[DEBUG] the custom model does not contain {layer.name}")
+            else:
+                print(f"[DEBUG] load the weights of the {layer.name} in the base model")
+                layer.set_weights(base_layer.get_weights())
+                used_named_weights.add(layer.name)
+        
+        state_dict_keys = set([layer.name for layer in model.layers])
+        #for base_layer, custom_layer in zip(layer_dict.keys(), model.layers):
+        #    print(base_layer, custom_layer.name)
+        print("[DEBUG] Missing key: ", str(state_dict_keys - used_named_weights))
+        print("[DEBUG] Not used by the custom model: ", str(layer_dict.keys() - used_named_weights))
+        print("[DEBUG] weight loading finish")
+        #sys.exit()
         """
         for idx, (key, val) in enumerate(layer_dict.items()):
             print(key, val.get_weights())
@@ -379,6 +390,3 @@ def ResNet50(
         **kwargs,
     )
 
-resnet = ResNet50(weights='imagenet', pooling = 'avg', classifier_activation = 'softmax')
-
-resnet.summary()
