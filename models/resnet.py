@@ -240,6 +240,7 @@ def ResNet(
         print("[DEBUG] Missing key: ", str(state_dict_keys - used_named_weights))
         print("[DEBUG] Not used by the custom model: ", str(layer_dict.keys() - used_named_weights))
         print("[DEBUG] weight loading finish")
+        del base_model
         #sys.exit()
         """
         for idx, (key, val) in enumerate(layer_dict.items()):
@@ -362,6 +363,7 @@ def ResNet50(
 
         if gate:
             gate_skip64 = GateLayer(64*4,64*4)
+            gate_skip64._name = 'gate_layer_0'
             gate_skip128 = GateLayer(128*4,128*4)
             gate_skip256 = GateLayer(256*4,256*4)
             gate_skip512 = GateLayer(512*4,512*4)
