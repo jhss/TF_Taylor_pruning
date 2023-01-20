@@ -57,8 +57,8 @@ class GradientPruning(object):
             unit_pruning_score = tf.pow(tf.multiply(parameter, gradient), 2)
 
             mult = 3.0
-            if unit_idx == 1: mult = 4.0
-            elif unit_idx == 2: mult = 6.0
+            if dim_idx == 1: mult = 4.0
+            elif dim_idx == 2: mult = 6.0
 
             unit_pruning_score /= mult
 
