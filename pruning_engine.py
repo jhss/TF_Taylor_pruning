@@ -19,122 +19,80 @@ class GradientPruning(object):
         self.pruned_neurons = 0  # store the number of pruned neurons
         self.prune_per_iteration = 100
 
-        self.prune_network_criteria = list()
-        self.prune_network_accumulate = {"by_layer": list(), "averaged": list()}
+        self.pruning_threshold = 0.0
+
+        self.score_per_gate = [ [0.0 for unit in range(gate.shape[-1])] for gate in self.parameters]
+        self.accumulated_magnitude = [ [] for _ in range(len(self.parameters))]
 
         self.cur_iterations = 0
-        self.group_size = 1
 
-        for parameter in self.parameters:
-            n_units = parameter.shape[-1]
-            cur_layer_criteria = [0.0 for unit in range(n_units)]
-            self.prune_network_criteria.append(cur_layer_criteria)
-
-            # 각 key별로 layer 개수만큼 list 추가
-            for key in self.prune_network_accumulate.keys():
-                self.prune_network_accumulate[key].append(list())
 
     def step(self, gradients):
         '''
         (1) estimate_pruning_score: Calculate the square of gradients, and accumulate it into 'prune_network_accumulate'.
-        (2) compute_saliency: add all score of the units in the same weight, and select the weight to be pruned.
+        (2) estimate_pruning_threshold: sort unit in the gate by its score, concatenate all units a
         '''
 
         self.gradients = gradients
 
         self.estimate_pruning_score()
-        self.compute_saliency()
+        self.estimate_pruning_threshold()
+        self.pruning_step()
 
-        all_neuron_units, neuron_units = self._count_number_of_neurons()
-        self.pruned_neurons = all_neuron_units - neuron_units
+        all_neurons, self.pruned_neurons = self._count_number_of_neurons()
 
-        return self.pruned_neurons, all_neuron_units
+        return all_neurons, self.pruned_neurons
 
     def estimate_pruning_score(self):
 
-        for dim_idx, (parameter, gradient) in enumerate(zip(self.parameters, self.gradients)):
+        for gate_idx, (parameter, gradient) in enumerate(zip(self.parameters, self.gradients)):
 
-            unit_pruning_score = tf.pow(tf.multiply(parameter, gradient), 2)
+            gate_pruning_score = tf.pow(tf.multiply(parameter, gradient), 2)
 
             mult = 3.0
-            if dim_idx == 1: mult = 4.0
-            elif dim_idx == 2: mult = 6.0
+            if gate_idx == 1: mult = 4.0
+            elif gate_idx == 2: mult = 6.0
 
-            unit_pruning_score /= mult
+            gate_pruning_score /= mult
 
             if self.cur_iterations == 0:
-                self.prune_network_accumulate['by_layer'][dim_idx] = unit_pruning_score
+                self.accumulated_magnitude[gate_idx] = gate_pruning_score
             else:
-                self.prune_network_accumulate['by_layer'][dim_idx] += unit_pruning_score
+                self.accumulated_magnitude[gate_idx] += gate_pruning_score
 
         self.cur_iterations += 1
 
+    def estimate_pruning_threshold(self):
 
-    # list_criteria_per_layer에 있는 layer를 하나의 group으로 묶는다.
-    # 하나의 layer에 있는 모든 뉴런의 score를 더해서 layer마다 저장한다.
-    # [ [(n1, score), (n2, score), ... ], [ ]] -> [[layer1, score], [layer2, score], ... ]
-    def group_criteria(self, list_criteria_per_layer, group_size = 1):
+        for gate_idx, gate in enumerate(self.parameters):
 
-        groups = list()
-        for layer in list_criteria_per_layer:
-            layer_groups = list()
-            indices = np.argsort(layer)
+            cur_gate_scores = self.accumulated_magnitude[gate_idx] / self.cur_iterations
+            n_units = gate.shape[-1]
 
-            for group_id in range(int(np.ceil(len(layer)/group_size))):
-                current_group = slice(group_id*group_size, min((group_id+1)*group_size, len(layer)))
-                values = [layer[ind] for ind in indices[current_group]]
-                group = [indices[current_group], sum(values)]
-                layer_groups.append(group)
-            groups.append(layer_groups)
+            for unit_idx in range(n_units):
+                unit_score = cur_gate_scores[unit_idx].numpy().item()
+                self.score_per_gate[gate_idx][unit_idx] =  unit_score * gate[unit_idx]
 
-        return groups
+        flattend_scores = np.asarray([score for scores in self.score_per_gate for score in scores]).reshape(-1)
 
-    def compute_saliency(self):
-
-        for layer, parameter in enumerate(self.parameters):
-
-            contribution = self.prune_network_accumulate["by_layer"][layer] / self.cur_iterations
-            # [CHECK] whether use momentum or not
-            # use momentum to accumulate criteria over several pruning iterations.
-            # weighted average between previous average and current contribution.
-            # 각 layer마다 계산된 criteria를 할당한다.
-            self.prune_network_accumulate["averaged"][layer] = contribution
-            current_layer = self.prune_network_accumulate["averaged"][layer]
-
-            n_units = parameter.shape[-1]
-
-            for unit in range(n_units):
-                criterion_now = current_layer[unit].numpy().item()
-                self.prune_network_criteria[layer][unit] =  criterion_now * parameter[unit]
-
-        '''
-        각 뉴런마다 할당한 contribution을 기반으로, group의 contribution을 계산한다.
-
-        [CHECK] group criteria가 어떻게 되는지 확인해봐야함
-        '''
-        # create groups per layer
-
-        groups = self.group_criteria(self.prune_network_criteria, group_size = self.group_size)
-
-         # get an array of all criteria from groups
-        all_criteria = np.asarray([group[1] for layer in groups for group in layer]).reshape(-1)
-
-        prune_neurons_now = (self.pruned_neurons + self.prune_per_iteration)//self.group_size - 1
+        # For each pruning step, additional neurons by 'prune_per_iteration' are removed.
+        threshold_neuron_idx = self.pruned_neurons + self.prune_per_iteration - 1
 
         # adaptively estimate threshold given a number of neurons to be removed
-        threshold_now = np.sort(all_criteria)[prune_neurons_now]
+        self.pruning_threshold = np.sort(flattend_scores)[threshold_neuron_idx]
 
+    def pruning_step(self):
 
-        for layer, parameter in enumerate(self.parameters):
-            cur_layer_weight = self.model.get_layer(f'gate_layer_{layer}').get_weights()[0]
+        for gate_idx, parameter in enumerate(self.parameters):
+            cur_layer_weight = self.model.get_layer(f'gate_layer_{gate_idx}').get_weights()[0]
 
-            for group in groups[layer]:
-                if group[1] <= threshold_now:
-                    for unit in group[0]:
-                        # do actual pruning
-                        cur_layer_weight[...,unit] = 0.0
-                        self.parameters[layer][unit].assign(0.0)
-            self.model.get_layer(f'gate_layer_{layer}').set_weights([cur_layer_weight])
+            for unit_idx, magnitude in enumerate(self.score_per_gate[gate_idx]):
+                if magnitude <= self.pruning_threshold:
+                    # do actual pruning
+                    cur_layer_weight[unit_idx] = 0.0
+                    self.parameters[gate_idx][unit_idx].assign(0.0)
+
+            self.model.get_layer(f'gate_layer_{gate_idx}').set_weights([cur_layer_weight])
 
     def _count_number_of_neurons(self):
         '''
@@ -143,19 +101,21 @@ class GradientPruning(object):
         all_neuron_units - number of neurons considered for pruning
         neuron_units     - number of not pruned neurons in the model
         '''
-        all_neuron_units = 0
-        neuron_units = 0
+        all_neurons = 0
+        remain_neurons = 0
         for idx, parameter in enumerate(self.parameters):
 
             cur_num_params = parameter.shape[-1]
-            all_neuron_units += cur_num_params
+            all_neurons += cur_num_params
             for unit in range(cur_num_params):
                 statistics = parameter[unit]
 
                 if statistics > 0.0:
-                    neuron_units += 1
+                    remain_neurons += 1
 
-        return all_neuron_units, neuron_units
+        pruned_neurons = all_neurons - remain_neurons
+
+        return all_neurons, pruned_neurons
 
 def select_pruning_parameters(model):
 
