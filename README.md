@@ -1,6 +1,6 @@
 # Importance Estimation for Neural Network Pruning
 
-This repository contains unofficial TensorFlow 2.x based implementation of Importance Estimation for Neural Network Pruning, CVPR 2019 paper.
+This repository contains unofficial TensorFlow 2.x based implementation of [Importance Estimation for Neural Network Pruning](https://openaccess.thecvf.com/content_CVPR_2019/papers/Molchanov_Importance_Estimation_for_Neural_Network_Pruning_CVPR_2019_paper.pdf) (CVPR, 2019)
 
 This is re-write of PyToch 1.0 based implementation available [here](https://github.com/NVlabs/Taylor_pruning). Unlike the official code, this repository only implements Taylor Gate, which corresponds to Gate after BN in the paper (Best method in the paper).
 
