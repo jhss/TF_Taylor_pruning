@@ -21,4 +21,4 @@ You can download ImageNet automatically if you use `huggingface-cli login` and r
     
 ## Result
 
-![](./image/result.png )
+![](./image/result.PNG )
